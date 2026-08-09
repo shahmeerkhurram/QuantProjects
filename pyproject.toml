@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "portfolio-risk-engine"
+version = "0.1.0"
+description = "Portfolio risk engine: VaR/ES with regulatory backtesting, option pricing and Greeks, and correlation-network contagion analysis."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Shahmeer Khurram" }]
+keywords = ["quantitative-finance", "risk-management", "value-at-risk", "expected-shortfall", "black-scholes", "backtesting"]
+
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "networkx>=3.0",
+]
+
+[project.optional-dependencies]
+market = ["yfinance>=0.2.40"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.6", "mypy>=1.10"]
+notebooks = ["jupyter>=1.0", "nbconvert>=7.0", "ipykernel>=6.0"]
+
+[project.scripts]
+risk-engine = "risk_engine.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Pinned explicitly so a ruff upgrade cannot silently change what CI enforces.
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # simplify
+    "ISC",  # implicit string concatenation
+    "RUF",  # ruff-specific
+    "BLE",  # blind except
+]
+
+[tool.ruff.lint.per-file-ignores]
+# __all__ is grouped by submodule with explanatory comments, which is more
+# readable here than alphabetical order.
+"src/risk_engine/__init__.py" = ["RUF022"]
+"src/artgallery/__init__.py" = ["RUF022"]
+# The matplotlib backend must be selected before pyplot is imported, so these
+# imports genuinely cannot sit at the top of the file. Moving them silently
+# breaks figure rendering inside notebooks.
+"src/risk_engine/report.py" = ["E402"]
+
+[tool.mypy]
+files = ["src"]
+ignore_missing_imports = true      # numpy/scipy/networkx stubs are incomplete
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
