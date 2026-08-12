@@ -10,6 +10,9 @@ answer, all driven from the same data and the same portfolio object:
 * **What happens to the derivatives book, and where does stress spread?**
   :mod:`risk_engine.options`, :mod:`risk_engine.portfolio` and
   :mod:`risk_engine.contagion`.
+* **Are we still diversified?**  :mod:`risk_engine.diversification` — the
+  absorption ratio of the covariance spectrum, the effective number of bets,
+  regime classification, and a pre-registered drawdown event study.
 """
 
 from .backtest import (
@@ -31,6 +34,23 @@ from .contagion import (
     rank_systemic_assets,
 )
 from .data import load_prices, synthetic_prices, to_returns
+from .diversification import (
+    AbsorptionResult,
+    DrawdownEvent,
+    EventStudyResult,
+    MarkovRegimes,
+    absorption_ratio,
+    drawdown_events,
+    effective_number_of_bets,
+    event_study,
+    ewma_covariance,
+    fit_markov_regimes,
+    realised_vol_signal,
+    rolling_absorption_ratio,
+    sensitivity_grid,
+    standardised_shift,
+    threshold_crossings,
+)
 from .options import (
     Greeks,
     binomial_price,
@@ -110,4 +130,20 @@ __all__ = [
     "correlation_network",
     "debt_rank",
     "rank_systemic_assets",
+    # diversification
+    "AbsorptionResult",
+    "DrawdownEvent",
+    "EventStudyResult",
+    "MarkovRegimes",
+    "absorption_ratio",
+    "effective_number_of_bets",
+    "ewma_covariance",
+    "rolling_absorption_ratio",
+    "standardised_shift",
+    "realised_vol_signal",
+    "threshold_crossings",
+    "drawdown_events",
+    "event_study",
+    "fit_markov_regimes",
+    "sensitivity_grid",
 ]

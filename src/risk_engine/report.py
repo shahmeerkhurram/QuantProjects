@@ -38,12 +38,15 @@ import numpy as np
 import pandas as pd
 
 from .backtest import BacktestResult
+from .diversification import AbsorptionResult, DrawdownEvent, MarkovRegimes
 from .options import OptionType
 from .var import RiskResult
 
 __all__ = [
+    "plot_absorption_ratio",
     "plot_greeks_profile",
     "plot_network",
+    "plot_regime_probabilities",
     "plot_return_distribution",
     "plot_var_backtest",
     "results_table",
@@ -178,6 +181,111 @@ def plot_network(graph: nx.Graph, systemic: pd.DataFrame | None = None, seed: in
 
     ax.set_title("Correlation network — node size and colour = systemic impact")
     ax.axis("off")
+    fig.tight_layout()
+    return fig
+
+
+def plot_absorption_ratio(
+    result: AbsorptionResult,
+    events: list[DrawdownEvent] | None = None,
+    signal: pd.Series | None = None,
+    crossings: pd.DatetimeIndex | None = None,
+    threshold: float = 1.0,
+):
+    """Absorption ratio over time, with drawdown episodes shaded.
+
+    Two stacked panels because the level and the shift are different claims and
+    conflating them is the mistake this module exists to avoid: the top panel
+    shows where AR sits, the bottom shows the standardised shift that is actually
+    the signal, with its threshold and the crossings it produced marked.
+    """
+    n_panels = 2 if signal is not None else 1
+    fig, axes = plt.subplots(
+        n_panels, 1, figsize=(12, 4.0 * n_panels + 1.5), sharex=True, squeeze=False
+    )
+    ax = axes[0][0]
+
+    ax.plot(result.absorption.index, result.absorption.to_numpy(),
+            color=PALETTE["primary"], linewidth=1.3,
+            label=f"Absorption ratio (K={result.k} of N={result.n_assets})")
+
+    for i, event in enumerate(events or []):
+        ax.axvspan(event.peak, event.trough, color=PALETTE["danger"], alpha=0.13,
+                   label="Drawdown episode" if i == 0 else None)
+
+    ax.set_ylabel("Absorption ratio")
+    ax.set_title(
+        f"Diversification breakdown — {result.cov_model} covariance, "
+        f"{result.window}-day window"
+    )
+    ax.legend(frameon=False, fontsize=9, loc="lower right")
+    _style(ax)
+
+    if signal is not None:
+        ax2 = axes[1][0]
+        ax2.plot(signal.index, signal.to_numpy(), color=PALETTE["accent"],
+                 linewidth=1.1, label="Standardised ΔAR")
+        ax2.axhline(threshold, color=PALETTE["danger"], linestyle="--", linewidth=1.2,
+                    label=f"Threshold = {threshold:g} st.dev.")
+        ax2.axhline(0, color="black", linewidth=0.6)
+        for i, event in enumerate(events or []):
+            ax2.axvspan(event.peak, event.trough, color=PALETTE["danger"], alpha=0.13,
+                        label="Drawdown episode" if i == 0 else None)
+        if crossings is not None and len(crossings):
+            hits = [c for c in crossings if c in signal.index]
+            ax2.scatter(hits, signal.reindex(hits).to_numpy(), color=PALETTE["danger"],
+                        s=26, zorder=5, label=f"Crossings ({len(hits)})")
+        ax2.set_ylabel("Standard deviations")
+        ax2.legend(frameon=False, fontsize=9, loc="upper left")
+        _style(ax2)
+
+    axes[-1][0].set_xlabel("Date")
+    fig.tight_layout()
+    return fig
+
+
+def plot_regime_probabilities(
+    regimes: MarkovRegimes,
+    absorption: pd.Series | None = None,
+    events: list[DrawdownEvent] | None = None,
+):
+    """Smoothed probability of the high-coupling state, over the AR series.
+
+    Plotting the probability rather than a hard state label is deliberate: the
+    model's own uncertainty is part of the result, and a binary regime label
+    would hide the periods where it is genuinely undecided.
+    """
+    fig, ax = plt.subplots(figsize=(12, 5.0))
+    probs = regimes.smoothed_probabilities.iloc[:, regimes.high_state]
+
+    ax.fill_between(probs.index, 0.0, probs.to_numpy(), color=PALETTE["danger"],
+                    alpha=0.30, linewidth=0)
+    ax.plot(probs.index, probs.to_numpy(), color=PALETTE["danger"], linewidth=1.0,
+            label="P(high-coupling regime)")
+
+    for i, event in enumerate(events or []):
+        ax.axvspan(event.peak, event.trough, color=PALETTE["muted"], alpha=0.20,
+                   label="Drawdown episode" if i == 0 else None)
+
+    ax.set_ylim(0, 1.02)
+    ax.set_ylabel("Smoothed probability")
+
+    if absorption is not None:
+        twin = ax.twinx()
+        twin.plot(absorption.index, absorption.to_numpy(), color=PALETTE["primary"],
+                  linewidth=1.0, alpha=0.85, label="Absorption ratio")
+        twin.set_ylabel("Absorption ratio")
+        twin.spines["top"].set_visible(False)
+        twin.legend(frameon=False, fontsize=9, loc="lower right")
+
+    duration = regimes.expected_durations[regimes.high_state]
+    ax.set_title(
+        f"Two-state Markov switching — high-coupling regime persists "
+        f"{duration:.0f} trading days on average"
+    )
+    ax.legend(frameon=False, fontsize=9, loc="upper left")
+    ax.set_xlabel("Date")
+    _style(ax)
     fig.tight_layout()
     return fig
 

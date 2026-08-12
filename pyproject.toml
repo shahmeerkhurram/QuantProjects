@@ -18,6 +18,7 @@ dependencies = [
     "scipy>=1.10",
     "matplotlib>=3.7",
     "networkx>=3.0",
+    "statsmodels>=0.14",
 ]
 
 [project.optional-dependencies]

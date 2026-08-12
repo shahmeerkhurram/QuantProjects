@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/shahmeerkhurram/QuantProjects/actions/workflows/ci.yml/badge.svg)](https://github.com/shahmeerkhurram/QuantProjects/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-266-brightgreen.svg)](tests/)
-[![Coverage](https://img.shields.io/badge/coverage-93%25-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-344-brightgreen.svg)](tests/)
+[![Coverage](https://img.shields.io/badge/coverage-94%25-brightgreen.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Two installable Python packages where rigorous mathematics meets decisions people
@@ -18,10 +18,11 @@ actually make: a **portfolio risk engine** used by a market-risk function, and a
 They share a repository, a test philosophy and a build — not an import. Each
 stands alone.
 
-**266 tests, 93% coverage**, running on Python 3.10–3.13 in CI alongside `ruff`
+**344 tests, 94% coverage**, running on Python 3.10–3.13 in CI alongside `ruff`
 and `mypy`. The tests assert *mathematical and financial properties* — put-call
-parity, lattice convergence, recovery of known GARCH parameters, the `⌊n/3⌋`
-guard bound, absence of look-ahead — not merely that the code returns a number.
+parity, lattice convergence, recovery of known GARCH parameters, the analytic
+limits of the absorption ratio, the `⌊n/3⌋` guard bound, absence of look-ahead —
+not merely that the code returns a number.
 
 ---
 
@@ -73,6 +74,7 @@ path and one portfolio object.
 | How much can we lose? | `var`, `volatility` | VaR & ES — historical, parametric (normal / Student-t), three Monte Carlo engines, and GARCH(1,1)/EWMA conditional models with Filtered Historical Simulation |
 | Is the model any good? | `backtest` | Walk-forward backtesting with Kupiec, Christoffersen and joint conditional-coverage tests, plus binomial-derived Basel traffic-light zones |
 | What's the derivatives book worth, and where does stress spread? | `options`, `portfolio`, `contagion` | Black-Scholes with all five Greeks and implied vol; delta-gamma revaluation of a mixed book; DebtRank contagion over an empirical correlation network |
+| Has the portfolio stopped diversifying? | `diversification` | Absorption ratio over a rolling sample or EWMA conditional covariance, effective number of bets, two-state Markov regimes, and a pre-registered drawdown event study |
 
 ### Command line
 
@@ -165,6 +167,30 @@ graph = correlation_network(returns, method="threshold", threshold=0.35)
 rank_systemic_assets(graph, initial_distress=0.30)   # ranked by systemic impact
 ```
 
+**Is the portfolio still diversified?**
+
+```python
+from risk_engine import (
+    rolling_absorption_ratio, standardised_shift, threshold_crossings,
+    drawdown_events, event_study, fit_markov_regimes,
+)
+
+ar = rolling_absorption_ratio(returns, window=500, cov_model="ewma")  # or "sample"
+print(ar.summary())              # AR level, K, and the effective number of bets
+ar.effective_bets.iloc[-1]       # N holdings, this many independent bets
+
+signal = standardised_shift(ar.absorption, short=15, long=250)
+crossings = threshold_crossings(signal, threshold=1.0)
+
+events = drawdown_events(pnl, min_depth=0.15)        # the pre-registered rule
+event_study(crossings, events, returns.index, horizon=60).summary()
+fit_markov_regimes(ar.absorption).summary()          # is "coupled" a regime?
+```
+
+The event study reports false positives next to the hit rate by construction —
+see [finding 4](#4-diversification-does-collapse--but-it-is-not-an-early-warning),
+which is a negative result.
+
 ### What the engine found
 
 Real outputs on daily data for AAPL, MSFT, GOOGL, JPM, XOM (2018-01-03 to
@@ -246,6 +272,63 @@ GOOGL    0.1935          5.52x       3
 Systemic importance depends on the *strength* of the links and the *value* at
 each node, not the count of edges — which is why degree centrality is not a
 substitute for a contagion model.
+
+#### 4. Diversification does collapse — but it is not an early warning
+
+26 US large caps across seven sectors, 2007-01-04 to 2026-08-12 (4,932 daily
+observations), 500-day window, `K = ⌊N/5⌋ = 5`, EWMA conditional covariance.
+
+**The collapse is real and large.** The absorption ratio — the share of total
+variance explained by the top 5 of 26 eigenvectors — runs at a **76.4% median**,
+**72.3%** at its calm quartile, and peaked at **97.2% on 2020-03-17**. Translated
+into a diversification count, the **26 holdings behave like 8.5 independent bets
+on a median day, 10.1 in calm conditions, and 1.9 at the March-2020 peak.** In
+every drawdown episode the count roughly halves — 7.9 → 1.9 in 2020, 12.6 → 5.5
+in 2018, 9.3 → 4.5 in 2024-25. A two-state Markov-switching fit confirms this is
+a *regime* and not a noisy fortnight: coupling persists, and the two states are
+almost equally sticky.
+
+```
+transition matrix (row-stochastic)   expected duration   state mean AR
+[[0.9801, 0.0199],                   50.3 days           71.9%  (low coupling)
+ [0.0210, 0.9790]]                   47.6 days           82.0%  (high coupling)
+```
+
+**The lead-time claim does not survive the test.** Six drawdowns of ≥15% clear
+the pre-registered rule; the 2007 one is excluded because no signal exists that
+early, leaving five evaluable. Scored against a standardised ΔAR crossing (15-day
+vs 250-day mean, in units of the long-window standard deviation):
+
+| Trigger | Threshold | Hits | Median lead | Lead range | Crossings | False positives |
+|---|---|---|---|---|---|---|
+| Absorption (EWMA cov) | 1.0 | 1/5 | 4d | — | 20 | 12 |
+| Absorption (EWMA cov) | 0.5 | 4/5 | 7d | 1–8d | 35 | 25 |
+| Absorption (sample cov) | 0.5 / 1.0 / 1.5 | 0/5 | — | — | 10 / 12 / 6 | 9 / 10 / 5 |
+| **Trailing realised vol** | 1.0 | 1/5 | **23d** | — | 12 | 6 |
+| **Trailing realised vol** | 0.5 | 1/5 | **30d** | — | 13 | 7 |
+
+**Realised volatility warns earlier, and it is not close.** Where absorption fires
+at all it fires 1–8 trading days ahead — inside the noise of picking the peak
+date — while the volatility benchmark, run through *identical* machinery on the
+same events, leads by 23–30 days. Loosening the absorption threshold to 0.5σ buys
+4 hits out of 5 but at the cost of **25 false positives**: a signal firing 35
+times to catch 4 events is not a risk trigger. Tightening it to 1.5σ catches
+nothing at all. The sensitivity grid across windows {250, 500, 750}, K ∈ {2, 5, 8}
+and thresholds {0.5, 1.0, 1.5} shows no corner where the result improves — the
+median lead never exceeds 8 days anywhere in 27 parameter triples.
+
+So the honest headline is the **negative** one: in this universe and window, the
+absorption ratio is a *coincident* measure of diversification, not a leading
+indicator of drawdowns. It answers "how concentrated is my risk right now" —
+which is a genuinely useful question the VaR number does not answer, and the
+effective-bet count answers it legibly — but it does not answer "what is about to
+happen", and anything claiming otherwise here would be a parameter search
+reported as a discovery.
+
+Two caveats that cut *against* the negative result, stated because they are real:
+the covariance choice matters enormously (the rolling sample covariance scores
+0/5 at every threshold — it is simply too slow), and the universe is
+survivorship-biased, being names that exist and are liquid today.
 
 ### Design decisions worth defending
 
@@ -386,6 +469,10 @@ analytically, then assert the estimator recovers it.
 | Truncating input leaves earlier forecasts unchanged | No look-ahead — caught a real EWMA seeding bug |
 | `basel_zone_thresholds(250, 0.99) == (4, 9)` | Reproduces the published supervisory table |
 | Uncorrelated pair carries less VaR than an identical pair | Diversification is actually represented |
+| AR → 1 for one-factor returns, → K/N for independent ones | Both analytic limits of the absorption ratio, from the ends |
+| EWMA covariance diagonal == the univariate EWMA filter, to 1e-12 | "Reuses the VaR-side machinery" is checkable, not asserted |
+| The event study recovers a *planted* lead time exactly | The measurement instrument is calibrated before it is trusted |
+| Hits + in-episode + false positives == every crossing | A signal cannot quietly shed its inconvenient alarms |
 | Triangle areas sum to the polygon's area | The triangulation partitions — no gaps, no overlaps |
 | Guard count ≤ `⌊n/3⌋`, attained on combs | The theorem itself, in both directions |
 
@@ -402,12 +489,13 @@ src/risk_engine/
 ├── options.py      Black-Scholes, Greeks, implied vol, binomial lattice
 ├── portfolio.py    mixed equity/option book, scenario revaluation
 ├── contagion.py    correlation networks + DebtRank
+├── diversification.py  absorption ratio, effective bets, regimes, event study
 ├── report.py       charts and tables
 └── cli.py          risk-engine command line
 src/artgallery/
 ├── geometry.py     polygon primitives, visibility, containment
 └── solver.py       triangulation, 3-colouring, guard placement
-tests/              266 tests, 93% coverage
+tests/              344 tests, 94% coverage
 notebooks/          narrative walkthroughs, committed with outputs
 scripts/            export engine results to the portfolio site
 archive/            the original single-cell notebooks, kept for provenance
@@ -419,7 +507,7 @@ archive/            the original single-cell notebooks, kept for provenance
 ## Development
 
 ```bash
-pytest -q                                    # 266 tests, ~4 minutes
+pytest -q                                    # 344 tests, ~6 minutes
 pytest --cov=risk_engine --cov=artgallery    # coverage report
 pytest tests/test_volatility.py -v           # one module
 ruff check src tests scripts                 # lint
@@ -430,6 +518,7 @@ Regenerate the figures and the portfolio site's data:
 
 ```bash
 risk-engine report --tickers AAPL,MSFT,GOOGL,JPM,XOM --output outputs
+python scripts/diversification_study.py --output outputs    # every number in finding 4
 python scripts/export_site_data.py --site ../shahmeerkhurram.github.io
 ```
 
@@ -456,6 +545,9 @@ exists to prevent.
   expiry; full repricing is the right tool for deep stress scenarios.
 - **Constant portfolio weights** — a daily-rebalanced risk view, not a
   buy-and-hold backtest.
+- **The absorption ratio is coincident, not leading** — see finding 4. It is
+  reported because it measures concentration well, not because it forecasts.
+  Its universe is also survivorship-biased: 26 names that are liquid *today*.
 - **Correlation is not causation.** The contagion network measures co-movement,
   not contractual exposure; a true interbank DebtRank would use a liabilities
   matrix.
