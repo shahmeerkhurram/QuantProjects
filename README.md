@@ -12,13 +12,13 @@ actually make: a **portfolio risk engine** used by a market-risk function, and a
 
 | Package | What it does | Why it's here |
 |---|---|---|
-| **`risk_engine`** | VaR & Expected Shortfall across 9 methods, regulatory backtesting, option Greeks, network contagion | Measuring and *validating* financial risk |
+| **`risk_engine`** | VaR & Expected Shortfall across 9 methods, regulatory backtesting, option Greeks, network contagion, diversification-regime detection | Measuring and *validating* financial risk |
 | **`artgallery`** | Fisk's constructive proof of the Art Gallery Theorem, with verified guard placement | My BSc thesis topic and ongoing research with the Department of Geometry, University of Debrecen |
 
 They share a repository, a test philosophy and a build — not an import. Each
 stands alone.
 
-**344 tests, 94% coverage**, running on Python 3.10–3.13 in CI alongside `ruff`
+**344 tests, 94% coverage**, running on Python 3.10 and 3.13 in CI alongside `ruff`
 and `mypy`. The tests assert *mathematical and financial properties* — put-call
 parity, lattice convergence, recovery of known GARCH parameters, the analytic
 limits of the absorption ratio, the `⌊n/3⌋` guard bound, absence of look-ahead —
@@ -55,7 +55,8 @@ pytest -q
 
 Extras: `market` adds live data via yfinance, `dev` adds pytest/ruff/mypy,
 `notebooks` adds Jupyter. Core install needs only NumPy, SciPy, pandas,
-Matplotlib and NetworkX.
+Matplotlib, NetworkX and statsmodels — the last of these solely for the
+two-state Markov-switching fit in `diversification`.
 
 **No network? Everything still runs.** `risk_engine.data` degrades from live
 download → local CSV cache → a deterministic synthetic generator producing
@@ -497,9 +498,9 @@ src/artgallery/
 └── solver.py       triangulation, 3-colouring, guard placement
 tests/              344 tests, 94% coverage
 notebooks/          narrative walkthroughs, committed with outputs
-scripts/            export engine results to the portfolio site
+scripts/            the diversification study, plus export to the portfolio site
 archive/            the original single-cell notebooks, kept for provenance
-.github/workflows/  CI: ruff + mypy, then tests on Python 3.10-3.13
+.github/workflows/  CI: ruff + mypy, then tests on Python 3.10 and 3.13
 ```
 
 ---
