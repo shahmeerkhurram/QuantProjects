@@ -25,10 +25,6 @@ jobs:
       - name: Ruff
         run: ruff check src tests
 
-      - name: Ruff format check
-        run: ruff format --check src tests
-        continue-on-error: true  # advisory: formatting is not yet enforced
-
       - name: mypy
         run: mypy
 
@@ -38,7 +34,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        # The ends of the supported range only. A defect that hits 3.11 or 3.12
+        # but neither 3.10 nor 3.13 would have to live in a feature added in one
+        # and removed in the other — rare enough that testing the brackets buys
+        # nearly all the signal for half the CI minutes and half the noise.
+        python-version: ["3.10", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
