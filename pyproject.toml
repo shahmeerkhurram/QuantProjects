@@ -23,7 +23,7 @@ dependencies = [
 
 [project.optional-dependencies]
 market = ["yfinance>=0.2.40"]
-dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.6", "mypy>=1.10"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "pytest-xdist>=3.5", "ruff>=0.6", "mypy>=1.10"]
 notebooks = ["jupyter>=1.0", "nbconvert>=7.0", "ipykernel>=6.0"]
 
 [project.scripts]

@@ -507,7 +507,8 @@ archive/            the original single-cell notebooks, kept for provenance
 ## Development
 
 ```bash
-pytest -q                                    # 344 tests, ~6 minutes
+pytest -q                                    # 344 tests, ~8 minutes
+pytest -q -n auto --dist worksteal           # the same, ~3 minutes
 pytest --cov=risk_engine --cov=artgallery    # coverage report
 pytest tests/test_volatility.py -v           # one module
 ruff check src tests scripts                 # lint

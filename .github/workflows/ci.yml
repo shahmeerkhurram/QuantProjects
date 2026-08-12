@@ -12,15 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
 
       - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+        run: uv pip install --system -e ".[dev]"
 
       - name: Ruff
         run: ruff check src tests
@@ -38,26 +38,44 @@ jobs:
         # but neither 3.10 nor 3.13 would have to live in a feature added in one
         # and removed in the other — rare enough that testing the brackets buys
         # nearly all the signal for half the CI minutes and half the noise.
-        python-version: ["3.10", "3.13"]
+        #
+        # Coverage is measured once, on 3.13, because it is the same code either
+        # way and instrumentation is the single most expensive thing in the run.
+        # On 3.12+ coverage can use sys.monitoring instead of a trace callback,
+        # which is what makes measuring it nearly free; 3.10 has no such option,
+        # so that job simply runs the tests.
+        include:
+          - python-version: "3.10"
+          - python-version: "3.13"
+            coverage: "--cov=risk_engine --cov=artgallery --cov-report=term-missing"
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
 
       - name: Install the package and its test dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+        run: uv pip install --system -e ".[dev]"
 
       # No network access is needed: risk_engine.data falls back to its
       # deterministic synthetic generator, so the suite is fully reproducible.
+      #
+      # Two flags do the real work here. `-n auto` spreads the run across the
+      # runner's cores, which matters because four walk-forward backtest tests
+      # take ~60s each and account for roughly half the suite; and `--dist
+      # worksteal` rebalances as workers finish, so those four cannot pile onto
+      # one worker the way round-robin scheduling allows.
       - name: Run tests
-        run: pytest -q --cov=risk_engine --cov-report=term-missing
+        run: pytest -q -n auto --dist worksteal ${{ matrix.coverage }}
+        env:
+          COVERAGE_CORE: sysmon
 
       - name: Smoke-test the CLI
         run: |
