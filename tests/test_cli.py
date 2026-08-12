@@ -207,3 +207,54 @@ def test_contagion_writes_artifacts(tmp_path):
           "--output", str(tmp_path)])
     assert (tmp_path / "contagion_network.png").exists()
     assert (tmp_path / "systemic_ranking.csv").exists()
+
+
+# --------------------------------------------------------------------------
+# diversification
+# --------------------------------------------------------------------------
+
+#: Enough synthetic names for K = floor(N/5) to be meaningful rather than 1.
+SYNTH_WIDE = ",".join(f"SYN_{i:02d}" for i in range(20))
+
+
+def test_diversification_reports_absorption_and_the_event_study(capsys):
+    assert main(["diversification", "--tickers", SYNTH_WIDE, "--window", "250"]) == 0
+    out = capsys.readouterr().out
+    assert "Absorption ratio" in out
+    assert "Independent bets" in out
+    assert "Event study" in out
+    # The false-positive count is not optional output; a hit rate alone is not
+    # a result, and the CLI must not be able to quote one without the other.
+    assert "false positives" in out
+
+
+def test_diversification_benchmark_reports_realised_volatility(capsys):
+    assert main(["diversification", "--tickers", SYNTH_WIDE, "--window", "250",
+                 "--benchmark"]) == 0
+    assert "trailing realised volatility" in capsys.readouterr().out
+
+
+def test_diversification_refuses_a_universe_too_narrow_to_measure(capsys):
+    """With N < 5, K = floor(N/5) degenerates and the ratio means nothing."""
+    with pytest.raises(SystemExit) as exc:
+        main(["diversification", "--tickers", SYNTH])
+    assert exc.value.code != 0
+
+
+def test_diversification_refuses_a_window_longer_than_the_sample():
+    with pytest.raises(SystemExit) as exc:
+        main(["diversification", "--tickers", SYNTH_WIDE, "--window", "99999"])
+    assert exc.value.code != 0
+
+
+def test_diversification_supports_the_sample_covariance(capsys):
+    assert main(["diversification", "--tickers", SYNTH_WIDE, "--window", "250",
+                 "--cov-model", "sample"]) == 0
+    assert "sample covariance" in capsys.readouterr().out
+
+
+def test_diversification_writes_artifacts(tmp_path):
+    main(["diversification", "--tickers", SYNTH_WIDE, "--window", "250",
+          "--output", str(tmp_path)])
+    assert (tmp_path / "absorption_ratio.png").exists()
+    assert (tmp_path / "absorption_ratio.csv").exists()

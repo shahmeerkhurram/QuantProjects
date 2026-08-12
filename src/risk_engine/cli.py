@@ -1,11 +1,12 @@
 """Command-line interface: ``risk-engine <command>``.
 
-Four commands, mirroring the four questions the engine answers:
+Five commands, mirroring the five questions the engine answers:
 
     risk-engine report    --tickers AAPL,MSFT,GOOGL --confidence 0.99
     risk-engine backtest  --tickers AAPL,MSFT,GOOGL --window 250
     risk-engine option    --spot 100 --strike 105 --expiry 1 --vol 0.2
     risk-engine contagion --tickers AAPL,MSFT,GOOGL,JPM,XOM
+    risk-engine diversification --tickers <20+ names> --benchmark
 """
 
 from __future__ import annotations
@@ -20,6 +21,14 @@ from . import __version__
 from .backtest import METHODS, compare_models, rolling_var_backtest
 from .contagion import correlation_network, rank_systemic_assets
 from .data import load_prices, to_returns
+from .diversification import (
+    drawdown_events,
+    event_study,
+    realised_vol_signal,
+    rolling_absorption_ratio,
+    standardised_shift,
+    threshold_crossings,
+)
 from .options import (
     OptionType,
     binomial_price,
@@ -28,6 +37,7 @@ from .options import (
     put_call_parity_gap,
 )
 from .report import (
+    plot_absorption_ratio,
     plot_greeks_profile,
     plot_network,
     plot_return_distribution,
@@ -260,6 +270,76 @@ def cmd_contagion(args) -> int:
     return 0
 
 
+def cmd_diversification(args) -> int:
+    returns = _load(args)
+    if returns.shape[1] < 5:
+        raise SystemExit(
+            f"error: {returns.shape[1]} assets is too few for an absorption ratio; "
+            "K = floor(N/5) degenerates below 5 names — pass 20 or more"
+        )
+    if returns.shape[0] <= args.window:
+        raise SystemExit(
+            f"error: {returns.shape[0]} observations for a {args.window}-day window; "
+            "widen the date range or shorten --window"
+        )
+
+    result = rolling_absorption_ratio(
+        returns, window=args.window, k=args.k, cov_model=args.cov_model
+    )
+    pnl = portfolio_returns(returns, _weights(args.weights, returns.shape[1]))
+    signal = standardised_shift(result.absorption, short=args.short, long=args.long)
+    crossings = threshold_crossings(signal, threshold=args.threshold)
+    events = drawdown_events(pnl, min_depth=args.min_depth)
+
+    print(_rule(f"Absorption ratio — {args.cov_model} covariance"))
+    print(f"Assets       : {result.n_assets}   K: {result.k}   window: {result.window}d")
+    print(f"Absorption   : median {result.absorption.median():.2%}   "
+          f"calm {result.absorption.quantile(0.25):.2%}   "
+          f"peak {result.absorption.max():.2%} on {result.absorption.idxmax().date()}")
+    bets = result.effective_bets
+    print(f"Independent bets: median {bets.median():.2f} of {result.n_assets} holdings   "
+          f"stress {bets.quantile(0.05):.2f}   min {bets.min():.2f}")
+
+    print(_rule(f"Drawdown events (peak-to-trough >= {args.min_depth:.0%})"))
+    for event in events:
+        print(f"  {event}")
+
+    # Only events the signal could have reached are scored; see event_study.
+    available_from = signal.first_valid_index()
+    study = event_study(crossings, events, returns.index, horizon=args.horizon,
+                        available_from=available_from)
+    print(_rule(f"Event study — {args.threshold:g} st.dev. crossings"))
+    print(study.summary())
+
+    if args.benchmark:
+        vol_signal = realised_vol_signal(pnl, short=args.short, long=args.long)
+        vol_study = event_study(
+            threshold_crossings(vol_signal, threshold=args.threshold), events,
+            returns.index, horizon=args.horizon, available_from=available_from,
+        )
+        print(_rule("Benchmark — trailing realised volatility, identical machinery"))
+        print(vol_study.summary())
+        # State the comparison rather than leaving the reader to infer it: the
+        # benchmark exists to be able to falsify the absorption signal.
+        if vol_study.median_lead > study.median_lead or study.n_hits == 0:
+            print("\nRealised volatility warns at least as early here. Absorption is "
+                  "measuring concentration, not forecasting it.")
+
+    if args.output:
+        out = Path(args.output)
+        save_figure(
+            plot_absorption_ratio(result, events=events, signal=signal,
+                                  crossings=crossings, threshold=args.threshold),
+            out / "absorption_ratio.png",
+        )
+        frame = pd.DataFrame(
+            {"absorption": result.absorption, "effective_bets": result.effective_bets}
+        )
+        frame.to_csv(out / "absorption_ratio.csv")
+        print(f"\nWrote {out / 'absorption_ratio.png'} and {out / 'absorption_ratio.csv'}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="risk-engine",
@@ -319,6 +399,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_con.add_argument("--shock", type=float, default=0.3,
                        help="initial distress applied to the shocked asset")
     p_con.set_defaults(func=cmd_contagion)
+
+    p_div = sub.add_parser(
+        "diversification", help="absorption ratio, effective bets and the event study"
+    )
+    add_market_args(p_div)
+    p_div.add_argument("--window", type=int, default=500)
+    p_div.add_argument("--k", type=int, default=None,
+                       help="retained eigenvectors (default: floor(N/5))")
+    p_div.add_argument("--cov-model", choices=["ewma", "sample"], default="ewma")
+    p_div.add_argument("--threshold", type=float, default=1.0,
+                       help="signal threshold in standard deviations")
+    p_div.add_argument("--short", type=int, default=15)
+    p_div.add_argument("--long", type=int, default=250)
+    p_div.add_argument("--min-depth", type=float, default=0.15,
+                       help="peak-to-trough decline defining a drawdown event")
+    p_div.add_argument("--horizon", type=int, default=60,
+                       help="trading days a warning may precede an onset by")
+    p_div.add_argument("--benchmark", action="store_true",
+                       help="also score trailing realised volatility, for comparison")
+    p_div.set_defaults(func=cmd_diversification)
 
     return parser
 

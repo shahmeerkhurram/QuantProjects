@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/shahmeerkhurram/QuantProjects/actions/workflows/ci.yml/badge.svg)](https://github.com/shahmeerkhurram/QuantProjects/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-344-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-350-brightgreen.svg)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-94%25-brightgreen.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -18,7 +18,7 @@ actually make: a **portfolio risk engine** used by a market-risk function, and a
 They share a repository, a test philosophy and a build — not an import. Each
 stands alone.
 
-**344 tests, 94% coverage**, running on Python 3.10 and 3.13 in CI alongside `ruff`
+**350 tests, 94% coverage**, running on Python 3.10 and 3.13 in CI alongside `ruff`
 and `mypy`. The tests assert *mathematical and financial properties* — put-call
 parity, lattice convergence, recovery of known GARCH parameters, the analytic
 limits of the absorption ratio, the `⌊n/3⌋` guard bound, absence of look-ahead —
@@ -91,6 +91,11 @@ risk-engine option --spot 100 --strike 105 --expiry 1 --vol 0.2 --market-price 8
 
 # Correlation network and systemic ranking
 risk-engine contagion --tickers AAPL,MSFT,GOOGL,JPM,XOM,JNJ,WMT --threshold 0.35
+
+# Absorption ratio, effective bets, and the event study against realised vol
+risk-engine diversification --tickers AAPL,MSFT,INTC,IBM,ORCL,TXN,JPM,BAC,GS,AXP,\
+JNJ,PFE,MRK,UNH,XOM,CVX,SLB,PG,KO,WMT,MCD,CAT,HON,UNP,NEE,SO \
+  --start 2007-01-01 --benchmark
 ```
 
 Useful flags: `--horizon` (multi-day VaR), `--weights` (non-equal portfolios),
@@ -211,6 +216,8 @@ Real outputs on daily data for AAPL, MSFT, GOOGL, JPM, XOM (2018-01-03 to
 conditional_garch_empirical 3.2859% 4.0124%
 ```
 
+![Loss distribution with each method's VaR marked](docs/figures/loss_distribution.png)
+
 The spread across methods is 0.77pp — 24% of the smallest estimate. **That
 spread is model risk**, and it's the reason more than one method is run. ES
 separates the models more sharply than VaR: the normal ES sits 33% below the
@@ -234,6 +241,12 @@ Walk-forward, 250-day window, 99% confidence, 1,910 out-of-sample days:
 | EWMA + normal | 38 | 1.99% | 0.0001 | **0.7851** ✓ |
 | Parametric Student-t | 38 | 1.99% | 0.0001 | 0.0064 ✗ |
 | Parametric normal | 48 | 2.51% | 0.0000 | 0.0011 ✗ |
+
+![Walk-forward EWMA + FHS backtest, breaches flagged](docs/figures/backtest_ewma_fhs.png)
+
+The forecast line tracks the volatility rather than sitting flat through it —
+that is the whole difference between the models that pass and the models that
+do not, and it is visible before any test statistic is computed.
 
 **The diagnosis came from the independence test, not the coverage test.** Every
 unconditional model breaches too often, but that alone doesn't say *why*.
@@ -270,6 +283,8 @@ GOOGL    0.1935          5.52x       3
   WMT    0.0203          1.47x       1
 ```
 
+![Correlation network, node size and colour by systemic impact](docs/figures/contagion_network.png)
+
 Systemic importance depends on the *strength* of the links and the *value* at
 each node, not the count of edges — which is why degree centrality is not a
 substitute for a contagion model.
@@ -295,6 +310,8 @@ transition matrix (row-stochastic)   expected duration   state mean AR
  [0.0210, 0.9790]]                   47.6 days           82.0%  (high coupling)
 ```
 
+![Smoothed probability of the high-coupling regime, with the absorption ratio overlaid](docs/figures/absorption_regimes.png)
+
 **The lead-time claim does not survive the test.** Six drawdowns of ≥15% clear
 the pre-registered rule; the 2007 one is excluded because no signal exists that
 early, leaving five evaluable. Scored against a standardised ΔAR crossing (15-day
@@ -307,6 +324,13 @@ vs 250-day mean, in units of the long-window standard deviation):
 | Absorption (sample cov) | 0.5 / 1.0 / 1.5 | 0/5 | — | — | 10 / 12 / 6 | 9 / 10 / 5 |
 | **Trailing realised vol** | 1.0 | 1/5 | **23d** | — | 12 | 6 |
 | **Trailing realised vol** | 0.5 | 1/5 | **30d** | — | 13 | 7 |
+
+![Absorption ratio with drawdown episodes shaded, and the standardised ΔAR signal](docs/figures/absorption_ratio.png)
+
+The figure is the argument. Shaded bands are the pre-registered drawdowns; dots
+on the lower panel are the 20 threshold crossings. The spikes sit *on top of* the
+bands rather than to the left of them — which is what "coincident, not leading"
+looks like before any statistic is quoted.
 
 **Realised volatility warns earlier, and it is not close.** Where absorption fires
 at all it fires 1–8 trading days ahead — inside the noise of picking the peak
@@ -496,7 +520,8 @@ src/risk_engine/
 src/artgallery/
 ├── geometry.py     polygon primitives, visibility, containment
 └── solver.py       triangulation, 3-colouring, guard placement
-tests/              344 tests, 94% coverage
+tests/              350 tests, 94% coverage
+docs/figures/       the charts embedded in this README, regenerable from the CLI
 notebooks/          narrative walkthroughs, committed with outputs
 scripts/            the diversification study, plus export to the portfolio site
 archive/            the original single-cell notebooks, kept for provenance
@@ -508,7 +533,7 @@ archive/            the original single-cell notebooks, kept for provenance
 ## Development
 
 ```bash
-pytest -q                                    # 344 tests, ~8 minutes
+pytest -q                                    # 350 tests, ~8 minutes
 pytest -q -n auto --dist worksteal           # the same, ~3 minutes
 pytest --cov=risk_engine --cov=artgallery    # coverage report
 pytest tests/test_volatility.py -v           # one module
