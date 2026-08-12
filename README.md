@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/shahmeerkhurram/QuantProjects/actions/workflows/ci.yml/badge.svg)](https://github.com/shahmeerkhurram/QuantProjects/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-350-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-368-brightgreen.svg)](tests/)
 [![Coverage](https://img.shields.io/badge/coverage-94%25-brightgreen.svg)](tests/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -18,7 +18,7 @@ actually make: a **portfolio risk engine** used by a market-risk function, and a
 They share a repository, a test philosophy and a build — not an import. Each
 stands alone.
 
-**350 tests, 94% coverage**, running on Python 3.10 and 3.13 in CI alongside `ruff`
+**368 tests, 94% coverage**, running on Python 3.10 and 3.13 in CI alongside `ruff`
 and `mypy`. The tests assert *mathematical and financial properties* — put-call
 parity, lattice convergence, recovery of known GARCH parameters, the analytic
 limits of the absorption ratio, the `⌊n/3⌋` guard bound, absence of look-ahead —
@@ -73,7 +73,7 @@ path and one portfolio object.
 | Question | Module | Method |
 |---|---|---|
 | How much can we lose? | `var`, `volatility` | VaR & ES — historical, parametric (normal / Student-t), three Monte Carlo engines, and GARCH(1,1)/EWMA conditional models with Filtered Historical Simulation |
-| Is the model any good? | `backtest` | Walk-forward backtesting with Kupiec, Christoffersen and joint conditional-coverage tests, plus binomial-derived Basel traffic-light zones |
+| Is the model any good? | `backtest` | Walk-forward backtesting with Kupiec, Christoffersen and joint conditional-coverage tests, Acerbi-Székely Expected Shortfall backtests with simulated critical values, plus binomial-derived Basel traffic-light zones |
 | What's the derivatives book worth, and where does stress spread? | `options`, `portfolio`, `contagion` | Black-Scholes with all five Greeks and implied vol; delta-gamma revaluation of a mixed book; DebtRank contagion over an empirical correlation network |
 | Has the portfolio stopped diversifying? | `diversification` | Absorption ratio over a rolling sample or EWMA conditional covariance, effective number of bets, two-state Markov regimes, and a pre-registered drawdown event study |
 
@@ -137,6 +137,18 @@ bt = rolling_var_backtest(pnl, confidence=0.99, window=250, method="ewma_fhs")
 print(bt.summary())          # breaches, Basel zone, all three coverage tests
 
 compare_models(pnl, confidence=0.975, window=250)   # every model, ranked
+```
+
+**Expected Shortfall backtesting — because passing a VaR test says nothing about ES**
+
+```python
+from risk_engine.backtest import compare_es_models, es_backtest
+
+# Acerbi-Székely Z1 and Z2, critical values simulated from each model's own
+# predictive distribution, shown beside the VaR coverage verdicts.
+compare_es_models(pnl, confidence=0.975, window=250)
+
+es_backtest(bt, test="z2", n_simulations=10_000)     # one model, one statistic
 ```
 
 **Options and Greeks**
@@ -355,6 +367,51 @@ the covariance choice matters enormously (the rolling sample covariance scores
 0/5 at every threshold — it is simply too slow), and the universe is
 survivorship-biased, being names that exist and are liquid today.
 
+#### 5. The model that wins on VaR fails on Expected Shortfall
+
+Same universe and window as finding 2 (AAPL, MSFT, GOOGL, JPM, XOM, 1,910
+out-of-sample days), at the 97.5% level Basel FRTB uses for ES. The coverage
+tests above all test a *quantile* — whether a loss crossed the VaR line, never
+how far past it the loss went. ES needs its own test, and it is not elicitable
+(Gneiting 2011), so it needs an unusual one: the Acerbi-Székely (2014) statistics,
+with critical values simulated from each model's own predictive distribution
+(10,000 paths).
+
+| Model | Breaches | Z1 | Z1 p | Z2 | Z2 p | VaR tests | ES (Z2) |
+|---|---|---|---|---|---|---|---|
+| **EWMA + FHS** | 61 | −0.0236 | 0.3458 | −0.3076 | 0.0276 | ✅ **passes all 3** | ❌ **fails** |
+| Parametric Student-t | 66 | −0.1187 | 0.1545 | −0.5463 | 0.0043 | ✗ | ❌ |
+| Historical | 65 | −0.1057 | 0.0548 | −0.5052 | 0.0010 | ✗ | ❌ |
+| GARCH + FHS | 68 | −0.0603 | 0.0916 | −0.5099 | 0.0005 | ✗ | ❌ |
+| EWMA + normal | 67 | −0.1641 | 0.0000 | −0.6333 | 0.0001 | ✗ | ❌ |
+| Parametric normal | 67 | −0.3036 | 0.0000 | −0.8292 | 0.0000 | ✗ | ❌ |
+
+**EWMA + FHS — the only model that passes all three VaR coverage tests — fails
+the ES test.** Passing a quantile test is not evidence about the size of the
+losses beyond that quantile, and here is a model where the two verdicts
+genuinely disagree.
+
+**But the failure is about frequency, not severity**, and the two Acerbi-Székely
+statistics separate exactly that. Z1 conditions on the breaches that happened and
+asks whether they were the right *size*; Z2 does not condition, so it also
+carries the breach *count*:
+
+| Model | Breach rate (2.5% expected) | Mean loss ÷ forecast ES, given a breach |
+|---|---|---|
+| **EWMA + FHS** | 3.19% | **1.0236** |
+| GARCH + FHS | 3.56% | 1.0603 |
+| Historical | 3.40% | 1.1057 |
+| Parametric normal | 3.51% | 1.3036 |
+
+When EWMA + FHS is breached, the average loss is **within 2.4% of the ES it
+predicted** — the tail *size* forecast is nearly exact. It fails Z2 because it is
+breached 3.19% of the time instead of 2.5%. The normal model, by contrast, gets
+the severity wrong too: its tail losses average 30% worse than forecast.
+
+So the honest summary is **0 of 6 models pass Z2, 4 of 6 pass Z1** — the industry
+problem here is getting the tail *frequency* right, and a model can describe the
+severity of a crisis well while still being surprised by one too often.
+
 ### Design decisions worth defending
 
 The places where the obvious implementation is wrong, and what the engine does
@@ -491,6 +548,9 @@ analytically, then assert the estimator recovers it.
 | A GARCH fit recovers its simulated parameters | The MLE is correct, not merely convergent |
 | Filtering removes autocorrelation from squared returns | The volatility model does the job it exists to do |
 | Kupiec passes 10/1000, rejects 50/1000 | The test is itself tested, both directions |
+| Acerbi-Székely Z1/Z2 centre on 0 under a correct model, go negative under an understated tail | The ES test is calibrated in both directions before being trusted |
+| The simulated ES null recovers the degrees of freedom it was given | Critical values describe the tail the model actually claims, not a normal one |
+| ES ≥ VaR on every walk-forward forecast | An average beyond a quantile cannot fall below it |
 | Christoffersen rejects contiguous breaches | It detects the clustering it exists to detect |
 | Truncating input leaves earlier forecasts unchanged | No look-ahead — caught a real EWMA seeding bug |
 | `basel_zone_thresholds(250, 0.99) == (4, 9)` | Reproduces the published supervisory table |
@@ -521,7 +581,7 @@ src/risk_engine/
 src/artgallery/
 ├── geometry.py     polygon primitives, visibility, containment
 └── solver.py       triangulation, 3-colouring, guard placement
-tests/              350 tests, 94% coverage
+tests/              368 tests, 94% coverage
 docs/figures/       the charts embedded in this README, regenerable from the CLI
 notebooks/          narrative walkthroughs, committed with outputs
 scripts/            the diversification study, plus export to the portfolio site
@@ -534,7 +594,7 @@ archive/            the original single-cell notebooks, kept for provenance
 ## Development
 
 ```bash
-pytest -q                                    # 350 tests, ~8 minutes
+pytest -q                                    # 368 tests, ~8 minutes
 pytest -q -n auto --dist worksteal           # the same, ~3 minutes
 pytest --cov=risk_engine --cov=artgallery    # coverage report
 pytest tests/test_volatility.py -v           # one module

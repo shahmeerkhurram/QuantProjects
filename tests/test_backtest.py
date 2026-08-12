@@ -12,9 +12,16 @@ import pandas as pd
 import pytest
 
 from risk_engine.backtest import (
+    _normal_tail,
+    _null_shape,
+    _standardised_t_tail,
+    acerbi_szekely_z1,
+    acerbi_szekely_z2,
     basel_traffic_light,
     christoffersen_independence,
+    compare_es_models,
     conditional_coverage,
+    es_backtest,
     kupiec_pof,
     rolling_var_backtest,
 )
@@ -188,3 +195,223 @@ def test_backtest_rejects_insufficient_history(normal_series):
 def test_backtest_rejects_a_tiny_window(normal_series):
     with pytest.raises(ValueError, match="too short"):
         rolling_var_backtest(normal_series, 0.99, window=10)
+
+
+# --------------------------------------------------------------------------
+# Acerbi-Székely — Expected Shortfall backtesting
+# --------------------------------------------------------------------------
+
+def _flat_forecasts(n: int, sigma: float, alpha: float):
+    """Constant VaR/ES forecasts from a normal of known scale."""
+    var_unit, es_unit = _normal_tail(alpha)
+    return np.full(n, sigma * var_unit), np.full(n, sigma * es_unit)
+
+
+@pytest.mark.parametrize("statistic", ["z1", "z2"])
+def test_es_statistic_is_centred_at_zero_under_a_correct_model(statistic):
+    """The null itself: forecasts drawn from the same law that generates losses.
+
+    Averaged over many independent samples the statistic must sit at zero. A
+    non-zero centre would mean every downstream p-value is biased.
+    """
+    rng = np.random.default_rng(11)
+    n, alpha, sigma = 4000, 0.025, 0.01
+    var, es = _flat_forecasts(n, sigma, alpha)
+
+    values = []
+    for _ in range(150):
+        losses = rng.standard_normal(n) * sigma
+        values.append(
+            acerbi_szekely_z1(losses, var, es)
+            if statistic == "z1"
+            else acerbi_szekely_z2(losses, var, es, 0.975)
+        )
+    assert np.nanmean(values) == pytest.approx(0.0, abs=0.02)
+
+
+@pytest.mark.parametrize("statistic", ["z1", "z2"])
+def test_es_statistic_is_negative_when_the_tail_is_understated(statistic):
+    """Fat-tailed losses against normal forecasts: the failure ES exists to catch.
+
+    Negative is the supervisory direction — realised tail losses exceed the
+    forecast ES.
+    """
+    rng = np.random.default_rng(12)
+    n, alpha, sigma = 4000, 0.025, 0.01
+    var, es = _flat_forecasts(n, sigma, alpha)
+
+    values = []
+    for _ in range(100):
+        # Unit-variance Student-t: same volatility, far heavier tail.
+        losses = rng.standard_t(3, n) * np.sqrt(1 / 3) * sigma
+        values.append(
+            acerbi_szekely_z1(losses, var, es)
+            if statistic == "z1"
+            else acerbi_szekely_z2(losses, var, es, 0.975)
+        )
+    assert np.nanmean(values) < -0.02
+
+
+def test_es_statistic_is_positive_when_the_model_is_over_conservative():
+    """The other direction must be distinguishable, not merely 'not negative'."""
+    rng = np.random.default_rng(13)
+    n, alpha, sigma = 4000, 0.025, 0.01
+    var, es = _flat_forecasts(n, sigma, alpha)
+    losses = rng.standard_normal(n) * sigma * 0.5
+    assert acerbi_szekely_z2(losses, var, es, 0.975) > 0.1
+
+
+def test_z1_is_undefined_without_breaches():
+    """A mean over an empty set is NaN, and is reported rather than hidden."""
+    losses = np.zeros(100)
+    var, es = _flat_forecasts(100, 0.01, 0.025)
+    assert np.isnan(acerbi_szekely_z1(losses, var, es))
+
+
+def test_null_shape_recovers_the_degrees_of_freedom_it_was_given():
+    """The simulated null is only right if the tail shape is right.
+
+    Matching the ES/VaR ratio must invert exactly, otherwise the critical values
+    describe a different distribution from the one the model is claiming.
+    """
+    alpha = 0.025
+    for df in (3.0, 4.0, 6.0, 10.0, 30.0):
+        var, es = _standardised_t_tail(df, alpha)
+        assert _null_shape(es / var, alpha) == pytest.approx(df, rel=1e-3)
+
+
+def test_null_shape_falls_back_to_normal_for_a_thin_tail():
+    alpha = 0.025
+    var, es = _normal_tail(alpha)
+    assert _null_shape(es / var, alpha) == float("inf")
+
+
+def test_es_never_falls_below_var_in_any_forecast(normal_series):
+    """ES is an average of losses beyond VaR, so it cannot be smaller.
+
+    Asserted across every walk-forward forecast rather than at a single point,
+    because a sign or indexing error would show up on only some days.
+    """
+    result = rolling_var_backtest(normal_series, 0.975, 500, "historical")
+    assert result.es_forecasts is not None
+    assert (result.es_forecasts >= result.var_forecasts).all()
+
+
+def test_es_backtest_passes_a_correctly_specified_walk_forward_model():
+    """Gaussian data, Gaussian model: the ES test must not reject."""
+    rng = np.random.default_rng(14)
+    series = pd.Series(
+        rng.standard_normal(3000) * 0.01,
+        index=pd.bdate_range("2010-01-01", periods=3000),
+    )
+    result = rolling_var_backtest(series, 0.975, 500, "parametric_normal")
+    test = es_backtest(result, n_simulations=2000, seed=3)
+    assert not test.reject_at_5pct
+    assert test.p_value > 0.05
+    assert test.n_simulations == 2000
+
+
+def test_es_backtest_rejects_a_model_blind_to_the_tail():
+    """Fat-tailed clustered data against a normal model: this must be caught."""
+    prices = synthetic_prices(["A", "B", "C"], n_days=3000, seed=8, df=2.5)
+    pnl = portfolio_returns(to_returns(prices))
+    result = rolling_var_backtest(pnl, 0.975, 250, "parametric_normal")
+    test = es_backtest(result, n_simulations=2000, seed=4)
+    assert test.statistic < 0
+    assert test.reject_at_5pct
+    assert "understated" in test.interpretation
+
+
+def test_es_backtest_requires_recorded_es_forecasts(normal_series):
+    result = rolling_var_backtest(normal_series, 0.975, 500, "historical")
+    result.es_forecasts = None
+    with pytest.raises(ValueError, match="no ES forecasts"):
+        es_backtest(result)
+
+
+def test_es_backtest_rejects_an_unknown_test_name(normal_series):
+    result = rolling_var_backtest(normal_series, 0.975, 500, "historical")
+    with pytest.raises(ValueError, match="unknown test"):
+        es_backtest(result, n_simulations=200, test="z3")
+
+
+def test_es_backtest_rejects_too_few_simulations(normal_series):
+    result = rolling_var_backtest(normal_series, 0.975, 500, "historical")
+    with pytest.raises(ValueError, match="at least 100 simulations"):
+        es_backtest(result, n_simulations=10)
+
+
+def test_es_backtest_reports_an_untestable_model_rather_than_passing_it():
+    """No breaches means no evidence, which is not the same as a clean bill.
+
+    A model so conservative it is never breached would otherwise sail through an
+    ES test by default — the one outcome a supervisor should not accept quietly.
+    """
+    index = pd.bdate_range("2010-01-01", periods=600)
+    series = pd.Series(np.zeros(600), index=index)
+    result = rolling_var_backtest(series, 0.975, 500, "historical")
+    # A flat series produces zero-width forecasts; widen them so the ES test
+    # sees positive forecasts that are never breached.
+    result.var_forecasts = pd.Series(np.full(100, 0.05), index=index[500:])
+    result.es_forecasts = pd.Series(np.full(100, 0.07), index=index[500:])
+    result.realised_returns = pd.Series(np.zeros(100), index=index[500:])
+
+    test = es_backtest(result, n_simulations=500, test="z1")
+    assert np.isnan(test.statistic)
+    assert not test.reject_at_5pct
+    assert "untestable" in test.interpretation
+
+
+def test_es_backtest_simulates_a_fat_tailed_null_when_the_model_claims_one():
+    """The null must follow the model's own tail, not a normal by default.
+
+    A Student-t model claims an ES/VaR ratio no normal can produce; simulating a
+    normal null would reject it for being right. Comparing the critical value
+    against a thin-tailed model's confirms the null actually moved.
+    """
+    prices = synthetic_prices(["A", "B"], n_days=2000, seed=21, df=3.0)
+    pnl = portfolio_returns(to_returns(prices))
+    fat = rolling_var_backtest(pnl, 0.975, 250, "parametric_t")
+    thin = rolling_var_backtest(pnl, 0.975, 250, "parametric_normal")
+
+    assert fat.es_forecasts is not None and thin.es_forecasts is not None
+    fat_ratio = float((fat.es_forecasts / fat.var_forecasts).mean())
+    thin_ratio = float((thin.es_forecasts / thin.var_forecasts).mean())
+    assert fat_ratio > thin_ratio
+
+    fat_test = es_backtest(fat, n_simulations=1000, seed=7)
+    thin_test = es_backtest(thin, n_simulations=1000, seed=7)
+    # A heavier null tail admits more extreme statistics before rejecting.
+    assert fat_test.critical_value < thin_test.critical_value
+
+
+def test_compare_es_models_tabulates_both_families_of_test():
+    """The comparison table must carry the VaR verdict beside the ES verdict.
+
+    That juxtaposition is the entire point: a model can pass one and fail the
+    other, and a table showing only one of them would hide it.
+    """
+    prices = synthetic_prices(["A", "B", "C"], n_days=1200, seed=22, df=4.0)
+    pnl = portfolio_returns(to_returns(prices))
+    table = compare_es_models(
+        pnl, confidence=0.975, window=250,
+        methods=("historical", "parametric_normal"),
+        n_simulations=500,
+    )
+    assert len(table) == 2
+    assert set(table.columns) >= {
+        "method", "z1", "z1_p", "z1_pass", "z2", "z2_p", "z2_pass",
+        "kupiec_p", "christoffersen_p", "var_passes_all", "mean_es",
+    }
+    # ES must exceed VaR on average for every model, by construction.
+    assert (table["mean_es"] > table["mean_var"]).all()
+    assert table["z2_p"].is_monotonic_decreasing
+
+
+def test_es_test_string_shows_the_statistic_and_verdict():
+    prices = synthetic_prices(["A", "B"], n_days=1000, seed=23)
+    pnl = portfolio_returns(to_returns(prices))
+    result = rolling_var_backtest(pnl, 0.975, 250, "historical")
+    rendered = str(es_backtest(result, n_simulations=500))
+    assert "Acerbi-Székely" in rendered
+    assert ("pass" in rendered) or ("REJECT" in rendered)
