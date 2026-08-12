@@ -467,6 +467,7 @@ outputs**, so everything renders on GitHub without running anything.
 | [`03_network_contagion`](notebooks/03_network_contagion.ipynb) | Correlation networks, DebtRank cascades, systemic ranking |
 | [`04_portfolio_integration`](notebooks/04_portfolio_integration.ipynb) | One VaR number across a mixed equity + options book |
 | [`05_art_gallery_problem`](notebooks/05_art_gallery_problem.ipynb) | Fisk's proof implemented, verified and drawn |
+| [`06_diversification_breakdown`](notebooks/06_diversification_breakdown.ipynb) | The absorption-ratio study end to end — including the falsification test it fails |
 
 ```bash
 pip install -e ".[notebooks]"
